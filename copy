@@ -1,0 +1,662 @@
+#ifndef LORAFRAGMENTEDAPP_H
+#define LORAFRAGMENTEDAPP_H
+
+#include <omnetpp.h>
+#include <string>
+#include <vector>
+#include <functional>
+
+#include "FragEncoder.h"
+#include "FragDecoder.h"
+
+// Definizione del comando per i frammenti di dati, come nello standard LoRaWAN (0x08)
+#define FRAGMENTATION_DATA_FRAGMENT_CMD 0x08
+// Porta applicativa standard per la frammentazione (FPort 201)
+#define FRAGMENTATION_PORT 201
+
+// Stato della sessione di frammentazione (decoder)
+enum FragSessionStatus {
+    FRAG_SESSION_NOT_STARTED = -2,
+    FRAG_SESSION_ONGOING = -1,
+    FRAG_SESSION_FINISHED_OK = 0,
+    FRAG_SESSION_FINISHED_ERROR = 1 // Es. Matrice non risolvibile
+};
+
+// Struttura per lo stato del decoder (estesa con il nostro MatrixError)
+struct FragDecoderStatus {
+    uint16_t FragNbRx;    // Numero di frammenti ricevuti
+    uint16_t FragNbLost;  // Numero di frammenti originali mancanti
+    bool MatrixError;     // True se la decodifica è fallita per problemi di rank/matrice
+    // Puoi aggiungere qui il rank effettivo se lo vuoi esporre dal decoder
+};
+
+// Struttura per i parametri di una sessione di frammentazione, ispirati dallo standard
+// Questa sostituisce i singoli M, R, FragSize passati in precedenza.
+struct FragSessionParameters {
+    uint16_t fragNb;    // Numero totale di frammenti nel blocco (M + R)
+    uint8_t fragSize;   // Dimensione di ogni frammento
+    uint8_t m;          // Numero di frammenti originali (M)
+    uint8_t redundancy; // Numero di frammenti di parità (R)
+    uint8_t padding;    // Numero di byte di padding necessari per i dati originali
+    uint8_t fragIndex;  // Indice della sessione (0-3), se si gestiscono più sessioni (per ora 0)
+};
+
+// Callback per accedere alla memoria del decoder
+using FragDecoderWriteCallback = std::function<void(uint32_t addr, const void* buffer, uint32_t size)>;
+using FragDecoderReadCallback = std::function<void(uint32_t addr, void* buffer, uint32_t size)>;
+using FragDecoderEraseCallback = std::function<void(void)>;
+
+class LoRaFragmentedApp
+{
+  protected:
+    FragEncoder *encoder;
+    FragDecoder *decoder;
+    FragSessionParameters sessionParams; // Ora incapsula tutti i parametri di sessione
+
+    // Buffer per il payload del frammento (escluso l'header)
+    std::vector<uint8_t> txFragmentBuffer;
+    std::vector<uint8_t> rxFragmentBuffer; // Buffer temporaneo per i frammenti in ricezione
+
+    // Stato della sessione di trasmissione/ricezione
+    FragSessionStatus txSessionStatus;
+    FragSessionStatus rxSessionStatus;
+
+    // Conteggi per le statistiche interne
+    uint32_t packetsSent;
+    uint32_t packetsReceived; // Inclusi duplicati e persi (a livello di radio)
+    uint32_t packetsPassedToDecoder; // Pacchetti validi passati al decoder
+    uint32_t successfulDecodings;
+    uint32_t failedDecodings;
+
+    // Callback per la comunicazione con il modulo esterno (es. MyLoRaApp)
+    // La callback ora riceve i dati del pacchetto già formattati con CMD e Header
+    std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> sendLoRaPacketCallback;
+    std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> sendLoRaControlPacketCallback;
+
+
+  public:
+    LoRaFragmentedApp();
+    ~LoRaFragmentedApp();
+
+    // L'inizializzazione ora accetta direttamente i parametri della sessione
+    void initialize(const FragSessionParameters& params,
+                    FragDecoderWriteCallback writeCb,
+                    FragDecoderReadCallback readCb,
+                    FragDecoderEraseCallback eraseCb);
+
+    void finish();
+
+    // Funzione per avviare la trasmissione (mittente)
+    void startTransmission(const std::vector<uint8_t>& originalData);
+
+    // Funzione per elaborare un pacchetto LoRa ricevuto (ricevitore)
+    void onLoRaPacketReceived(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t rssi, uint8_t snr);
+
+    // Funzione per impostare la callback di invio pacchetti LoRa
+    void setSendLoRaPacketCallback(std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> callback) {
+        sendLoRaPacketCallback = callback;
+    }
+
+    // Funzione per impostare la callback di invio pacchetti di controllo LoRa (se implementati in futuro)
+    void setSendLoRaControlPacketCallback(std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> callback) {
+        sendLoRaControlPacketCallback = callback;
+    }
+
+    // Metodi per ottenere lo stato e le statistiche
+    FragDecoderStatus getDecoderStatus() const;
+    FragSessionStatus getTxSessionStatus() const { return txSessionStatus; }
+    FragSessionStatus getRxSessionStatus() const { return rxSessionStatus; }
+    uint32_t getPacketsSent() const { return packetsSent; }
+    uint32_t getPacketsReceived() const { return packetsReceived; }
+    uint32_t getPacketsPassedToDecoder() const { return packetsPassedToDecoder; }
+    uint32_t getSuccessfulDecodings() const { return successfulDecodings; }
+    uint32_t getFailedDecodings() const { return failedDecodings; }
+
+    // Nuovo metodo per resettare lo stato di ricezione del decoder (utile per simulazioni multiple)
+    void resetRxSession();
+};
+
+#endif // LORAFRAGMENTEDAPP_H
+
+
+
+
+
+#include "LoRaFragmentedApp.h"
+#include <iostream> // Per debug
+#include <numeric> // Per std::iota
+
+LoRaFragmentedApp::LoRaFragmentedApp() :
+    encoder(nullptr),
+    decoder(nullptr),
+    txSessionStatus(FRAG_SESSION_NOT_STARTED),
+    rxSessionStatus(FRAG_SESSION_NOT_STARTED),
+    packetsSent(0),
+    packetsReceived(0),
+    packetsPassedToDecoder(0),
+    successfulDecodings(0),
+    failedDecodings(0)
+{
+}
+
+LoRaFragmentedApp::~LoRaFragmentedApp()
+{
+    delete encoder;
+    delete decoder;
+}
+
+void LoRaFragmentedApp::initialize(const FragSessionParameters& params,
+                                   FragDecoderWriteCallback writeCb,
+                                   FragDecoderReadCallback readCb,
+                                   FragDecoderEraseCallback eraseCb)
+{
+    this->sessionParams = params;
+
+    // Inizializza l'encoder con i parametri specifici
+    encoder = new FragEncoder();
+    encoder->FragEncoderInit(sessionParams.m, sessionParams.redundancy, sessionParams.fragSize);
+
+    // Inizializza il decoder con i parametri specifici e le callback di gestione memoria
+    decoder = new FragDecoder();
+    // Il 1 finale è la versione (Fragmentation_V1), come nello standard Semtech/STM
+    decoder->FragDecoderInit(sessionParams.fragNb, sessionParams.fragSize, writeCb, readCb, eraseCb, 1);
+
+    // Pre-alloca i buffer per i frammenti
+    txFragmentBuffer.resize(sessionParams.fragSize);
+    rxFragmentBuffer.resize(sessionParams.fragSize);
+
+    EV << "LoRaFragmentedApp initialized with M=" << (int)sessionParams.m
+       << ", R=" << (int)sessionParams.redundancy
+       << ", FragSize=" << (int)sessionParams.fragSize
+       << ", Total Fragments=" << (int)sessionParams.fragNb
+       << ", Session Index=" << (int)sessionParams.fragIndex << "\n";
+}
+
+void LoRaFragmentedApp::finish() {
+    // Logica di finalizzazione se necessaria
+    EV << "LoRaFragmentedApp finished. Sent: " << packetsSent
+       << ", Received: " << packetsReceived
+       << ", Passed to Decoder: " << packetsPassedToDecoder
+       << ", Successful Decodings: " << successfulDecodings
+       << ", Failed Decodings: " << failedDecodings << "\n";
+}
+
+void LoRaFragmentedApp::startTransmission(const std::vector<uint8_t>& originalData)
+{
+    if (!encoder || !sendLoRaPacketCallback) {
+        EV_ERROR << "LoRaFragmentedApp: Encoder not initialized or send callback not set.\n";
+        return;
+    }
+
+    txSessionStatus = FRAG_SESSION_ONGOING;
+    packetsSent = 0; // Reset contatore per nuova trasmissione
+
+    // Prepara l'encoder con i dati originali
+    encoder->FragEncoderPrepare(originalData.data(), originalData.size(), sessionParams.padding);
+
+    // Invia tutti i frammenti (originali + parità)
+    for (uint16_t i = 0; i < sessionParams.fragNb; ++i) {
+        uint16_t fragCounter = i; // Contatore del frammento (0 a FragNb-1)
+
+        // Costruisci l'header a 2 byte: [FragIndex (2bit) | FragCounter (14bit)]
+        // FragIndex è l'indice della sessione (sessionParams.fragIndex, per ora sempre 0)
+        uint16_t headerValue = (static_cast<uint16_t>(sessionParams.fragIndex & 0x03) << 14) | (fragCounter & 0x3FFF);
+
+        // Recupera il frammento dal encoder
+        encoder->FragEncoderGetFragment(i, txFragmentBuffer.data());
+
+        // Prepara il pacchetto LoRa: [CMD (1 byte) | Header (2 byte) | Payload (FragSize byte)]
+        // La callback gestirà l'allocazione effettiva del cPacket
+        std::vector<uint8_t> packetToSend;
+        packetToSend.push_back(FRAGMENTATION_DATA_FRAGMENT_CMD); // Comando standard (0x08)
+        packetToSend.push_back((headerValue >> 8) & 0xFF);       // Byte più significativo dell'header
+        packetToSend.push_back(headerValue & 0xFF);             // Byte meno significativo dell'header
+        packetToSend.insert(packetToSend.end(), txFragmentBuffer.begin(), txFragmentBuffer.end());
+
+        // Chiama la callback per inviare il pacchetto via LoRaWAN
+        // Usa la porta standard FRAGMENTATION_PORT (201)
+        sendLoRaPacketCallback(packetToSend, FRAGMENTATION_PORT, 0);
+        packetsSent++;
+        EV << "Sent fragment " << i << " (Session Index: " << (int)sessionParams.fragIndex
+           << ", Header Value: 0x" << std::hex << headerValue << std::dec << ")\n";
+    }
+    txSessionStatus = FRAG_SESSION_FINISHED_OK; // La fase di trasmissione è completata
+}
+
+void LoRaFragmentedApp::onLoRaPacketReceived(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t rssi, uint8_t snr)
+{
+    packetsReceived++;
+
+    if (port != FRAGMENTATION_PORT) {
+        EV << "Received packet on wrong port: " << (int)port << ". Expected " << (int)FRAGMENTATION_PORT << ". Ignoring.\n";
+        return;
+    }
+    if (packetData.size() < 3) { // Minimo 1 byte comando + 2 byte header
+        EV << "Received too small packet (" << packetData.size() << " bytes). Ignoring.\n";
+        return;
+    }
+
+    uint8_t command = packetData[0];
+    if (command != FRAGMENTATION_DATA_FRAGMENT_CMD) {
+        // Ignora pacchetti di controllo o altri comandi per ora
+        EV << "Received control command (0x" << std::hex << (int)command << "). Ignoring for now.\n";
+        return;
+    }
+
+    // Estrai l'header a 2 byte
+    uint16_t headerValue = (static_cast<uint16_t>(packetData[1]) << 8) | packetData[2];
+    uint8_t receivedFragIndex = (headerValue >> 14) & 0x03; // I 2 bit più significativi
+    uint16_t receivedFragCounter = headerValue & 0x3FFF;      // I 14 bit meno significativi
+
+    // Verifica che l'indice di sessione sia corretto (utile se un giorno gestisci più sessioni)
+    if (receivedFragIndex != sessionParams.fragIndex) {
+        EV << "Received fragment for wrong session index (" << (int)receivedFragIndex << "). Expected " << (int)sessionParams.fragIndex << ". Ignoring.\n";
+        return;
+    }
+
+    // Copia il payload del frammento
+    size_t payloadSize = packetData.size() - 3; // Total size - 1 byte CMD - 2 bytes Header
+    if (payloadSize != sessionParams.fragSize) {
+        EV << "Received fragment with wrong payload size (" << payloadSize << " bytes). Expected " << (int)sessionParams.fragSize << ". Ignoring.\n";
+        return;
+    }
+    std::copy(packetData.begin() + 3, packetData.end(), rxFragmentBuffer.begin());
+
+    EV << "Received fragment " << receivedFragCounter << " (Session Index: " << (int)receivedFragIndex << "). Passing to decoder.\n";
+    packetsPassedToDecoder++;
+
+    if (rxSessionStatus == FRAG_SESSION_NOT_STARTED) {
+        // Inizializza lo stato di ricezione alla prima ricezione di un frammento valido
+        rxSessionStatus = FRAG_SESSION_ONGOING;
+    }
+
+    // Processa il frammento con il decoder
+    int32_t decodeStatus = decoder->FragDecoderProcess(receivedFragCounter, rxFragmentBuffer.data());
+
+    // Aggiorna lo stato della sessione di ricezione
+    if (decodeStatus == FRAG_SESSION_FINISHED_OK) {
+        rxSessionStatus = FRAG_SESSION_FINISHED_OK;
+        successfulDecodings++;
+        EV << "Decoding successful! Original data reconstructed.\n";
+        // Qui potresti recuperare i dati decodificati se necessario
+        // uint8_t* decodedData = decoder->FragDecoderGetData();
+        // ...
+    } else if (decodeStatus == FRAG_SESSION_FINISHED_ERROR) {
+        rxSessionStatus = FRAG_SESSION_FINISHED_ERROR;
+        failedDecodings++;
+        EV_ERROR << "Decoding failed! Matrix error or too many lost fragments.\n";
+    }
+    // Se decodeStatus è FRAG_SESSION_ONGOING, non facciamo nulla qui, attendiamo altri frammenti.
+}
+
+FragDecoderStatus LoRaFragmentedApp::getDecoderStatus() const {
+    if (decoder) {
+        return decoder->FragDecoderGetStatus();
+    }
+    // Restituisce uno stato vuoto se il decoder non è inizializzato
+    return {0, 0, false};
+}
+
+void LoRaFragmentedApp::resetRxSession() {
+    rxSessionStatus = FRAG_SESSION_NOT_STARTED;
+    packetsPassedToDecoder = 0; // Reset per la nuova sessione
+    // Dovresti anche chiamare decoder->FragDecoderErase() qui se vuoi resettare la memoria
+}
+
+
+#ifndef MYLORAAPP_H
+#define MYLORAAPP_H
+
+#include <omnetpp.h>
+#include <vector>
+#include <string>
+#include <memory> // Per std::unique_ptr
+#include <functional> // Per std::bind e std::placeholders
+
+#include "LoRaFragmentedApp.h" // Include la tua app logica di frammentazione
+#include "inet/applications/contract/IApp.h"
+#include "inet/common/lifecycle/NodeStatus.h" // Per NodeStatus
+#include "flora/LoRa/LoRaWANPacket_m.h" // Header per i messaggi LoRaWAN di FLoRa
+
+namespace flora {
+
+class MyLoRaApp : public inet::IApp
+{
+  protected:
+    // Parametri configurabili da omnetpp.ini
+    int numOriginalFragments;   // M
+    int numRedundantFragments;  // R
+    int fragmentSize;           // Dimensione di ciascun frammento in byte
+    int dataSize;               // Dimensione totale dei dati da frammentare
+    double transmissionInterval; // Intervallo tra gli invii (se non trasmetto tutto subito)
+
+    // Modulo applicativo core per la frammentazione
+    std::unique_ptr<LoRaFragmentedApp> fragmentedApp;
+
+    // Buffer per la memoria simulata del decoder
+    std::vector<uint8_t> decoderMemory;
+    uint32_t decoderMemorySize; // Dimensione totale della memoria allocata per il decoder
+
+    // Eventi timer per OMNeT++
+    omnetpp::cMessage *startAppTimer;
+
+    // Segnali per le statistiche (da registrare in omnetpp.ini)
+    omnetpp::simsignal_t decodingSuccessSignal;
+    omnetpp::simsignal_t fragmentsReceivedSignal;
+    omnetpp::simsignal_t fragmentsLostSignal;
+    omnetpp::simsignal_t packetsSentSignal;
+    omnetpp::simsignal_t matrixErrorSignal;
+    omnetpp::simsignal_t overheadRatioSignal; // Overhead: (Pacchetti_Ricevuti_Validi / M)
+
+
+  protected:
+    virtual void initialize(int stage) override;
+    virtual void handleMessage(omnetpp::cMessage *msg) override;
+    virtual void refreshDisplay() const override;
+    virtual void finish() override;
+
+    // Metodi callback per LoRaFragmentedApp (saranno passati come std::function)
+    void sendLoRaPacket(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t confirmType);
+
+    // Funzioni di accesso alla memoria per FragDecoder
+    void fragDecoderWrite(uint32_t addr, const void* buffer, uint32_t size);
+    void fragDecoderRead(uint32_t addr, void* buffer, uint32_t size);
+    void fragDecoderErase();
+
+    // Metodo per avviare la trasmissione
+    void startDataTransmission();
+
+    // Funzione per generare dati casuali
+    std::vector<uint8_t> generateRandomData(size_t size);
+};
+
+} // namespace flora
+
+#endif // MYLORAAPP_H
+
+
+#include "MyLoRaApp.h"
+#include "inet/common/ModuleAccess.h"
+#include "inet/common/Time.h"
+#include "inet/networklayer/common/L3AddressResolver.h"
+#include "inet/common/packet/Packet.h" // Per inet::Packet
+#include "inet/common/ModuleAccess.h" // Per findModuleByPath
+#include "flora/LoRa/LoRaWANPacket_m.h" // Assicurati sia incluso
+#include "inet/common/Time.h" // Per simTime()
+
+namespace flora {
+
+Define_Module(MyLoRaApp);
+
+void MyLoRaApp::initialize(int stage)
+{
+    // Chiamata all'inizializzazione del modulo base (IApp)
+    inet::IApp::initialize(stage);
+
+    if (stage == INITSTAGE_LOCAL) {
+        // Parametri dal file omnetpp.ini
+        numOriginalFragments = par("numOriginalFragments");
+        numRedundantFragments = par("numRedundantFragments");
+        fragmentSize = par("fragmentSize");
+        dataSize = par("dataSize");
+        transmissionInterval = par("transmissionInterval").doubleValue();
+
+        // Calcola il numero totale di frammenti
+        int totalFragments = numOriginalFragments + numRedundantFragments;
+        if (totalFragments > 16383) { // 2^14 - 1 (massimo per 14 bit di fragCounter)
+             throw omnetpp::cRuntimeError("Total number of fragments exceeds 14-bit limit (16383).");
+        }
+
+        // La dimensione della memoria del decoder deve essere sufficiente per tutti i frammenti
+        decoderMemorySize = totalFragments * fragmentSize;
+        decoderMemory.resize(decoderMemorySize);
+
+        // Inizializza LoRaFragmentedApp
+        fragmentedApp = std::make_unique<LoRaFragmentedApp>();
+
+        // Crea la struttura FragSessionParameters e popolala
+        FragSessionParameters sessionParams;
+        sessionParams.m = numOriginalFragments;
+        sessionParams.redundancy = numRedundantFragments;
+        sessionParams.fragNb = totalFragments;
+        sessionParams.fragSize = fragmentSize;
+        // Calcola il padding: (M * FragSize) - DataSize
+        // Se DataSize > (M * FragSize), significa che i dati non entrano, lancia un errore
+        if (dataSize > (numOriginalFragments * fragmentSize)) {
+            throw omnetpp::cRuntimeError("Data size exceeds the capacity of original fragments (M * FragSize).");
+        }
+        sessionParams.padding = (numOriginalFragments * fragmentSize) - dataSize;
+        // L'indice di sessione è 0 per una singola sessione nel tuo caso
+        sessionParams.fragIndex = 0;
+
+        // Inizializza LoRaFragmentedApp con la struttura dei parametri e le callback
+        fragmentedApp->initialize(sessionParams,
+                                  std::bind(&MyLoRaApp::fragDecoderWrite, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+                                  std::bind(&MyLoRaApp::fragDecoderRead, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+                                  std::bind(&MyLoRaApp::fragDecoderErase, this));
+
+        // Imposta la callback di invio pacchetti LoRa per LoRaFragmentedApp
+        fragmentedApp->setSendLoRaPacketCallback(std::bind(&MyLoRaApp::sendLoRaPacket, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+
+        // Registra i segnali per le statistiche
+        decodingSuccessSignal = registerSignal("decodingSuccess");
+        fragmentsReceivedSignal = registerSignal("fragmentsReceived");
+        fragmentsLostSignal = registerSignal("fragmentsLost");
+        packetsSentSignal = registerSignal("packetsSent");
+        matrixErrorSignal = registerSignal("matrixError");
+        overheadRatioSignal = registerSignal("overheadRatio");
+
+        // Inizializza timer
+        startAppTimer = new omnetpp::cMessage("startApp");
+    }
+    else if (stage == INITSTAGE_APPLICATION_LAYER) {
+        // Invia il messaggio di avvio a tempo 0 per avviare l'applicazione
+        scheduleAt(simTime(), startAppTimer);
+    }
+}
+
+void MyLoRaApp::finish()
+{
+    // Annulla i timer pendenti
+    cancelAndDelete(startAppTimer);
+
+    EV << "MyLoRaApp finished.\n";
+    fragmentedApp->finish(); // Chiama finish della tua app logica
+}
+
+void MyLoRaApp::handleMessage(omnetpp::cMessage *msg)
+{
+    if (msg == startAppTimer) {
+        // Avvia la trasmissione dei dati
+        EV << "MyLoRaApp: Starting data transmission at " << simTime() << "\n";
+        startDataTransmission();
+        delete msg; // Elimina il messaggio timer dopo l'uso
+    }
+    else {
+        // Ricevuto un pacchetto dal livello LoRaWAN (dovrebbe essere un LoRaWANPacket)
+        LoRaWANPacket* loRaPacket = dynamic_cast<LoRaWANPacket*>(msg);
+        if (loRaPacket) {
+            // Recupera il payload originale dal pacchetto LoRaWAN
+            omnetpp::cBytes *payloadBytes = dynamic_cast<omnetpp::cBytes*>(loRaPacket->decapsulate()); // Decapsula il cBytes
+            
+            if (payloadBytes) {
+                std::vector<uint8_t> packetData(payloadBytes->getData(), payloadBytes->getData() + payloadBytes->getLength());
+                uint8_t port = loRaPacket->getFPort();
+                uint8_t rssi = loRaPacket->getRssi(); // FLoRa dovrebbe fornire questi dati
+                uint8_t snr = loRaPacket->getSnr();
+
+                fragmentedApp->onLoRaPacketReceived(packetData, port, rssi, snr);
+
+                // Emetti le statistiche del decoder dopo ogni elaborazione di frammento
+                FragDecoderStatus status = fragmentedApp->getDecoderStatus();
+                emit(fragmentsReceivedSignal, (double)status.FragNbRx);
+                emit(fragmentsLostSignal, (double)status.FragNbLost);
+                emit(matrixErrorSignal, (double)status.MatrixError); // Emetti 1.0 per errore, 0.0 altrimenti
+
+                if (fragmentedApp->getRxSessionStatus() == FRAG_SESSION_FINISHED_OK) {
+                    emit(decodingSuccessSignal, 1.0); // 1.0 per successo
+                    // Calcola e emetti l'overhead ratio: pacchetti_reali_ricevuti / numOriginalFragments
+                    double overheadRatio = (double)fragmentedApp->getPacketsPassedToDecoder() / numOriginalFragments;
+                    emit(overheadRatioSignal, overheadRatio);
+                    // Resetta lo stato della ricezione per una nuova sessione (se la simulazione ne prevede più di una)
+                    fragmentedApp->resetRxSession();
+                    fragmentedApp->getDecoder()->FragDecoderErase(); // Cancella anche la memoria del decoder
+                } else if (fragmentedApp->getRxSessionStatus() == FRAG_SESSION_FINISHED_ERROR) {
+                    emit(decodingSuccessSignal, 0.0); // 0.0 per fallimento
+                    // In caso di fallimento, l'overhead ratio potrebbe essere alto o non applicabile.
+                    // Potresti emettere un valore speciale (es. -1.0) o non emettere nulla per questo segnale.
+                    fragmentedApp->resetRxSession();
+                    fragmentedApp->getDecoder()->FragDecoderErase(); // Cancella anche la memoria del decoder
+                }
+                delete payloadBytes; // Elimina il cBytes decapsulato
+            } else {
+                EV_WARN << "Received LoRaWANPacket without cBytes payload. Ignoring.\n";
+            }
+        } else {
+            EV_WARN << "Received unknown message type: " << msg->getName() << ". Ignoring.\n";
+        }
+        delete msg; // Elimina il messaggio LoRaWANPacket ricevuto
+    }
+}
+
+void MyLoRaApp::refreshDisplay() const
+{
+    // Per aggiornamenti visuali in Qtenv
+}
+
+// Funzione callback per LoRaFragmentedApp per inviare pacchetti LoRa
+void MyLoRaApp::sendLoRaPacket(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t confirmType)
+{
+    // Crea un nuovo pacchetto LoRaWAN per FLoRa
+    LoRaWANPacket *loRaPacket = new LoRaWANPacket("LoRaFragment");
+    loRaPacket->setFPort(port); // Porta applicativa, 201 per la frammentazione standard
+    loRaPacket->setTxPower(par("txPower").doubleValue()); // Recupera da omnetpp.ini se definito
+    loRaPacket->setSF(par("sf").intValue());      // Recupera da omnetpp.ini
+    loRaPacket->setBW(par("bw").doubleValue());    // Recupera da omnetpp.ini
+    loRaPacket->setCR(par("cr").intValue());      // Recupera da omnetpp.ini
+    loRaPacket->setMType(MType::UNCONFIRMED_DATA_UP); // Tipo di messaggio, per ora non confermato
+
+    // Incapsula i dati raw del frammento
+    omnetpp::cBytes *payloadBytes = new omnetpp::cBytes(reinterpret_cast<const char*>(packetData.data()), packetData.size());
+    loRaPacket->encapsulate(payloadBytes);
+    loRaPacket->setByteLength(payloadBytes->getLength()); // Imposta la lunghezza del pacchetto LoRaWAN
+
+    // Invia il pacchetto attraverso il gate "socketOut"
+    // Questo gate si connette a LoRaNic.upperLayerIn in LoRaNode.ned
+    send(loRaPacket, "socketOut");
+    emit(packetsSentSignal, 1.0); // Emetti un segnale ogni volta che un pacchetto viene inviato
+}
+
+// Implementazioni delle callback per la memoria del decoder
+void MyLoRaApp::fragDecoderWrite(uint32_t addr, const void* buffer, uint32_t size)
+{
+    if (addr + size > decoderMemorySize) {
+        throw omnetpp::cRuntimeError("FragDecoderWrite: Memory access out of bounds! Addr: %u, Size: %u, Memory Size: %u", addr, size, decoderMemorySize);
+    }
+    memcpy(decoderMemory.data() + addr, buffer, size);
+}
+
+void MyLoRaApp::fragDecoderRead(uint32_t addr, void* buffer, uint32_t size)
+{
+    if (addr + size > decoderMemorySize) {
+        throw omnetpp::cRuntimeError("FragDecoderRead: Memory access out of bounds! Addr: %u, Size: %u, Memory Size: %u", addr, size, decoderMemorySize);
+    }
+    memcpy(buffer, decoderMemory.data() + addr, size);
+}
+
+void MyLoRaApp::fragDecoderErase()
+{
+    // In una simulazione, un semplice reset del buffer è sufficiente
+    std::fill(decoderMemory.begin(), decoderMemory.end(), 0);
+    EV << "FragDecoderMemory erased.\n";
+}
+
+void MyLoRaApp::startDataTransmission()
+{
+    std::vector<uint8_t> originalData = generateRandomData(dataSize);
+    fragmentedApp->startTransmission(originalData);
+}
+
+std::vector<uint8_t> MyLoRaApp::generateRandomData(size_t size)
+{
+    std::vector<uint8_t> data(size);
+    for (size_t i = 0; i < size; ++i) {
+        data[i] = omnetpp::intrand(256); // Valori casuali da 0 a 255
+    }
+    return data;
+}
+
+} // namespace flora
+
+
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with this program.  If not, see http://www.gnu.org/licenses/.
+//
+
+package flora.LoraNode;
+
+import inet.mobility.static.StationaryMobility;
+import inet.networklayer.common.InterfaceTable;
+import inet.applications.contract.IApp;
+import flora.LoRa.LoRaNic;
+import flora.LoraNode.MyLoRaApp; // Importa MyLoRaApp
+
+module LoRaNode
+{
+    parameters:
+        int numApps = default(1);
+        string deploymentType = default("");
+        double maxGatewayDistance = default(320.0);
+        double gatewayX = default(320.0);
+        double gatewayY = default(320.0);
+
+        string appType = default("flora.LoraNode.MyLoRaApp");
+
+        @networkNode();
+        *.interfaceTableModule = default(absPath(".interfaceTable"));
+        @display("bgb=297,313;i=device/accesspoint;is=vs");
+    submodules:
+        interfaceTable: InterfaceTable {
+            @display("p=30,26");
+        }
+        mobility: StationaryMobility {
+            @display("p=24,88");
+        }
+        LoRaNic: LoRaNic {
+            @display("p=137,239");
+        }
+        app[numApps]: <appType> like IApp {
+            parameters:
+                // Parametri per MyLoRaApp (e di conseguenza per LoRaFragmentedApp)
+                numOriginalFragments = default(20);
+                numRedundantFragments = default(10);
+                fragmentSize = default(50);
+                dataSize = default(900); // M * FragmentSize - Padding (controlla sia <= numOriginalFragments * fragmentSize)
+                transmissionInterval = default(0s); // 0s per inviare tutti i frammenti subito
+
+                // Parametri di trasmissione LoRa, se gestiti dall'app
+                // Altrimenti, questi dovrebbero stare nel LoRaNic o essere letti da lì
+                double txPower @unit(dBm) = default(14dBm);
+                int sf = default(7); // Spreading Factor
+                double bw @unit(kHz) = default(125kHz); // Bandwidth
+                int cr = default(1); // Coding Rate
+
+            @display("p=375,76,row,150");
+        }
+    connections allowunconnected:
+        for i=0..numApps-1 {
+            app[i].socketOut --> LoRaNic.upperLayerIn;
+            LoRaNic.upperLayerOut --> app[i].socketIn;
+        }
+}
