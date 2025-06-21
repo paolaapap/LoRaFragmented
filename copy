@@ -115,6 +115,12 @@ class LoRaFragmentedApp : public omnetpp::cSimpleModule
 
 #endif // LORAFRAGMENTEDAPP_H
 
+
+
+
+
+
+
 #include "LoRaFragmentedApp.h"
 #include <iostream>
 #include <numeric>
@@ -415,3 +421,64 @@ void LoRaFragmentedApp::resetRxSession() {
 }
 
 Define_Module(LoRaFragmentedApp);
+
+
+
+
+LORA.NED
+// ... (omitted copyright and package declaration)
+
+package flora.LoraNode;
+
+import inet.mobility.static.StationaryMobility;
+import inet.networklayer.common.InterfaceTable;
+import flora.LoRa.LoRaNic;
+import LoRaFragmentedApp; // Importa direttamente la tua classe, assumendo sia nello stesso progetto o in un path accessibile
+
+module LoRaNode
+{
+    parameters:
+        int numApps = default(1); // Per la tua configurazione, probabilmente vorrai che sia 1
+        string deploymentType = default("");
+        double maxGatewayDistance = default(320.0);
+        double gatewayX = default(320.0);
+        double gatewayY = default(320.0);
+        // Rimosso appType: non serve più perché istanziamo direttamente LoRaFragmentedApp
+
+        @networkNode();
+        *.interfaceTableModule = default(absPath(".interfaceTable"));
+        @display("bgb=297,313;i=device/accesspoint;is=vs");
+    submodules:
+        interfaceTable: InterfaceTable {
+            @display("p=30,26");
+        }
+        mobility: StationaryMobility {
+            @display("p=24,88");
+        }
+        LoRaNic: LoRaNic {
+            @display("p=137,239");
+        }
+        // Qui istanziamo direttamente la tua app
+        app: LoRaFragmentedApp { // Nessun array, dato che hai un'unica app ora
+            parameters:
+                @display("p=375,76,row,150");
+        }
+    connections allowunconnected:
+        // Connessioni dirette per la tua app singola
+        app.out --> LoRaNic.upperLayerIn; // Modificato da socketOut a out
+        LoRaNic.upperLayerOut --> app.in; // Modificato da socketIn a in
+}
+
+
+
+
+
+OMNETT.INI
+# ...
+**.loRaNodes[*].numApps = 1
+**.loRaNodes[*].app[0].typename = "SimpleLoRaApp" # Questa linea verrà rimossa/modificata
+
+# ... altri parametri per SimpleLoRaApp
+**.numberOfPacketsToSend = 0
+**.timeToFirstPacket = exponential(1000s)
+**.timeToNextPacket = exponential(1000s)
