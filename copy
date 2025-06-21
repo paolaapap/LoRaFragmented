@@ -5,43 +5,54 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <numeric>
+#include <algorithm>
 
 #include "FragEncoder.h"
 #include "FragDecoder.h"
 
-// Definizione del comando per i frammenti di dati, come nello standard LoRaWAN (0x08)
 #define FRAGMENTATION_DATA_FRAGMENT_CMD 0x08
-// Porta applicativa standard per la frammentazione (FPort 201)
 #define FRAGMENTATION_PORT 201
 
-// Stato della sessione di frammentazione (decoder)
+namespace fragmentedApp {
+    std::vector<std::vector<uint8_t>> generateCodedFragments(
+                const std::vector<uint8_t>& originalFileBuffer,
+                uint16_t numFragments,
+                uint8_t fragmentSize,
+                uint16_t numCodedFragmentsToGenerate
+            );
+
+    void FragDecoderInit( uint16_t fragNb, uint8_t fragSize, FragDecoderCallbacks_t *callbacks );
+    int32_t FragDecoderProcess( uint16_t fragCounter, uint8_t *rawData );
+    FragDecoderStatus_t FragDecoderGetStatus( void );
+
+    #define FRAG_SESSION_ONGOING            -1
+    #define FRAG_SESSION_FINISHED_OK         0
+    #define FRAG_SESSION_FINISHED_ERROR      1
+}
+
 enum FragSessionStatus {
     FRAG_SESSION_NOT_STARTED = -2,
-    FRAG_SESSION_ONGOING = -1,
-    FRAG_SESSION_FINISHED_OK = 0,
-    FRAG_SESSION_FINISHED_ERROR = 1 // Es. Matrice non risolvibile
+    FRAG_SESSION_ONGOING_APP = -1,
+    FRAG_SESSION_FINISHED_OK_APP = 0,
+    FRAG_SESSION_FINISHED_ERROR_APP = 1
 };
 
-// Struttura per lo stato del decoder (estesa con il nostro MatrixError)
-struct FragDecoderStatus {
-    uint16_t FragNbRx;    // Numero di frammenti ricevuti
-    uint16_t FragNbLost;  // Numero di frammenti originali mancanti
-    bool MatrixError;     // True se la decodifica è fallita per problemi di rank/matrice
-    // Puoi aggiungere qui il rank effettivo se lo vuoi esporre dal decoder
+struct FragDecoderAppStatus {
+    uint16_t FragNbRx;
+    uint16_t FragNbLost;
+    bool MatrixError;
 };
 
-// Struttura per i parametri di una sessione di frammentazione, ispirati dallo standard
-// Questa sostituisce i singoli M, R, FragSize passati in precedenza.
 struct FragSessionParameters {
-    uint16_t fragNb;    // Numero totale di frammenti nel blocco (M + R)
-    uint8_t fragSize;   // Dimensione di ogni frammento
-    uint8_t m;          // Numero di frammenti originali (M)
-    uint8_t redundancy; // Numero di frammenti di parità (R)
-    uint8_t padding;    // Numero di byte di padding necessari per i dati originali
-    uint8_t fragIndex;  // Indice della sessione (0-3), se si gestiscono più sessioni (per ora 0)
+    uint16_t fragNb;
+    uint8_t fragSize;
+    uint8_t m;
+    uint8_t redundancy;
+    uint8_t padding;
+    uint8_t fragIndex;
 };
 
-// Callback per accedere alla memoria del decoder
 using FragDecoderWriteCallback = std::function<void(uint32_t addr, const void* buffer, uint32_t size)>;
 using FragDecoderReadCallback = std::function<void(uint32_t addr, void* buffer, uint32_t size)>;
 using FragDecoderEraseCallback = std::function<void(void)>;
@@ -49,27 +60,19 @@ using FragDecoderEraseCallback = std::function<void(void)>;
 class LoRaFragmentedApp
 {
   protected:
-    FragEncoder *encoder;
-    FragDecoder *decoder;
-    FragSessionParameters sessionParams; // Ora incapsula tutti i parametri di sessione
+    FragSessionParameters sessionParams;
 
-    // Buffer per il payload del frammento (escluso l'header)
-    std::vector<uint8_t> txFragmentBuffer;
-    std::vector<uint8_t> rxFragmentBuffer; // Buffer temporaneo per i frammenti in ricezione
+    std::vector<uint8_t> rxFragmentBuffer;
 
-    // Stato della sessione di trasmissione/ricezione
     FragSessionStatus txSessionStatus;
     FragSessionStatus rxSessionStatus;
 
-    // Conteggi per le statistiche interne
     uint32_t packetsSent;
-    uint32_t packetsReceived; // Inclusi duplicati e persi (a livello di radio)
-    uint32_t packetsPassedToDecoder; // Pacchetti validi passati al decoder
+    uint32_t packetsReceived;
+    uint32_t packetsPassedToDecoder;
     uint32_t successfulDecodings;
     uint32_t failedDecodings;
 
-    // Callback per la comunicazione con il modulo esterno (es. MyLoRaApp)
-    // La callback ora riceve i dati del pacchetto già formattati con CMD e Header
     std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> sendLoRaPacketCallback;
     std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> sendLoRaControlPacketCallback;
 
@@ -78,7 +81,6 @@ class LoRaFragmentedApp
     LoRaFragmentedApp();
     ~LoRaFragmentedApp();
 
-    // L'inizializzazione ora accetta direttamente i parametri della sessione
     void initialize(const FragSessionParameters& params,
                     FragDecoderWriteCallback writeCb,
                     FragDecoderReadCallback readCb,
@@ -86,24 +88,19 @@ class LoRaFragmentedApp
 
     void finish();
 
-    // Funzione per avviare la trasmissione (mittente)
     void startTransmission(const std::vector<uint8_t>& originalData);
 
-    // Funzione per elaborare un pacchetto LoRa ricevuto (ricevitore)
     void onLoRaPacketReceived(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t rssi, uint8_t snr);
 
-    // Funzione per impostare la callback di invio pacchetti LoRa
     void setSendLoRaPacketCallback(std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> callback) {
         sendLoRaPacketCallback = callback;
     }
 
-    // Funzione per impostare la callback di invio pacchetti di controllo LoRa (se implementati in futuro)
     void setSendLoRaControlPacketCallback(std::function<void(const std::vector<uint8_t>&, uint8_t, uint8_t)> callback) {
         sendLoRaControlPacketCallback = callback;
     }
 
-    // Metodi per ottenere lo stato e le statistiche
-    FragDecoderStatus getDecoderStatus() const;
+    FragDecoderAppStatus getDecoderStatus() const;
     FragSessionStatus getTxSessionStatus() const { return txSessionStatus; }
     FragSessionStatus getRxSessionStatus() const { return rxSessionStatus; }
     uint32_t getPacketsSent() const { return packetsSent; }
@@ -112,23 +109,22 @@ class LoRaFragmentedApp
     uint32_t getSuccessfulDecodings() const { return successfulDecodings; }
     uint32_t getFailedDecodings() const { return failedDecodings; }
 
-    // Nuovo metodo per resettare lo stato di ricezione del decoder (utile per simulazioni multiple)
     void resetRxSession();
 };
 
 #endif // LORAFRAGMENTEDAPP_H
 
-
-
-
-
 #include "LoRaFragmentedApp.h"
-#include <iostream> // Per debug
-#include <numeric> // Per std::iota
+#include <iostream>
+#include <numeric>
+#include <algorithm>
+
+#include "FragEncoder.h"
+#include "FragDecoder.h"
+
+using namespace fragmentedApp;
 
 LoRaFragmentedApp::LoRaFragmentedApp() :
-    encoder(nullptr),
-    decoder(nullptr),
     txSessionStatus(FRAG_SESSION_NOT_STARTED),
     rxSessionStatus(FRAG_SESSION_NOT_STARTED),
     packetsSent(0),
@@ -141,8 +137,6 @@ LoRaFragmentedApp::LoRaFragmentedApp() :
 
 LoRaFragmentedApp::~LoRaFragmentedApp()
 {
-    delete encoder;
-    delete decoder;
 }
 
 void LoRaFragmentedApp::initialize(const FragSessionParameters& params,
@@ -152,17 +146,9 @@ void LoRaFragmentedApp::initialize(const FragSessionParameters& params,
 {
     this->sessionParams = params;
 
-    // Inizializza l'encoder con i parametri specifici
-    encoder = new FragEncoder();
-    encoder->FragEncoderInit(sessionParams.m, sessionParams.redundancy, sessionParams.fragSize);
+    FragDecoderCallbacks_t decoderCallbacks = {writeCb, readCb, eraseCb};
+    fragmentedApp::FragDecoderInit(sessionParams.fragNb, sessionParams.fragSize, &decoderCallbacks);
 
-    // Inizializza il decoder con i parametri specifici e le callback di gestione memoria
-    decoder = new FragDecoder();
-    // Il 1 finale è la versione (Fragmentation_V1), come nello standard Semtech/STM
-    decoder->FragDecoderInit(sessionParams.fragNb, sessionParams.fragSize, writeCb, readCb, eraseCb, 1);
-
-    // Pre-alloca i buffer per i frammenti
-    txFragmentBuffer.resize(sessionParams.fragSize);
     rxFragmentBuffer.resize(sessionParams.fragSize);
 
     EV << "LoRaFragmentedApp initialized with M=" << (int)sessionParams.m
@@ -173,7 +159,6 @@ void LoRaFragmentedApp::initialize(const FragSessionParameters& params,
 }
 
 void LoRaFragmentedApp::finish() {
-    // Logica di finalizzazione se necessaria
     EV << "LoRaFragmentedApp finished. Sent: " << packetsSent
        << ", Received: " << packetsReceived
        << ", Passed to Decoder: " << packetsPassedToDecoder
@@ -183,44 +168,55 @@ void LoRaFragmentedApp::finish() {
 
 void LoRaFragmentedApp::startTransmission(const std::vector<uint8_t>& originalData)
 {
-    if (!encoder || !sendLoRaPacketCallback) {
-        EV_ERROR << "LoRaFragmentedApp: Encoder not initialized or send callback not set.\n";
+    if (!sendLoRaPacketCallback) {
+        EV_ERROR << "LoRaFragmentedApp: Send callback not set. Cannot start transmission.\n";
+        txSessionStatus = FRAG_SESSION_FINISHED_ERROR_APP;
         return;
     }
 
-    txSessionStatus = FRAG_SESSION_ONGOING;
-    packetsSent = 0; // Reset contatore per nuova trasmissione
+    txSessionStatus = FRAG_SESSION_ONGOING_APP;
+    packetsSent = 0;
 
-    // Prepara l'encoder con i dati originali
-    encoder->FragEncoderPrepare(originalData.data(), originalData.size(), sessionParams.padding);
+    std::vector<uint8_t> paddedOriginalData = originalData;
+    size_t expectedEncoderInputSize = static_cast<size_t>(sessionParams.m) * sessionParams.fragSize;
+    if (paddedOriginalData.size() < expectedEncoderInputSize) {
+        paddedOriginalData.resize(expectedEncoderInputSize, 0);
+    } else if (paddedOriginalData.size() > expectedEncoderInputSize) {
+        EV_ERROR << "Original data size (" << originalData.size() << ") exceeds M * FragSize (" << expectedEncoderInputSize << "). Truncating.\n";
+        paddedOriginalData.resize(expectedEncoderInputSize);
+    }
 
-    // Invia tutti i frammenti (originali + parità)
+    std::vector<std::vector<uint8_t>> allCodedFragments =
+        fragmentedApp::generateCodedFragments(paddedOriginalData,
+                                               sessionParams.m,
+                                               sessionParams.fragSize,
+                                               sessionParams.fragNb);
+
+    if (allCodedFragments.empty() || allCodedFragments.size() != sessionParams.fragNb) {
+        EV_ERROR << "Failed to generate coded fragments or incorrect number of fragments generated.\n";
+        txSessionStatus = FRAG_SESSION_FINISHED_ERROR_APP;
+        return;
+    }
+
     for (uint16_t i = 0; i < sessionParams.fragNb; ++i) {
-        uint16_t fragCounter = i; // Contatore del frammento (0 a FragNb-1)
+        uint16_t fragCounter = i;
 
-        // Costruisci l'header a 2 byte: [FragIndex (2bit) | FragCounter (14bit)]
-        // FragIndex è l'indice della sessione (sessionParams.fragIndex, per ora sempre 0)
         uint16_t headerValue = (static_cast<uint16_t>(sessionParams.fragIndex & 0x03) << 14) | (fragCounter & 0x3FFF);
 
-        // Recupera il frammento dal encoder
-        encoder->FragEncoderGetFragment(i, txFragmentBuffer.data());
+        const std::vector<uint8_t>& currentFragment = allCodedFragments[i];
 
-        // Prepara il pacchetto LoRa: [CMD (1 byte) | Header (2 byte) | Payload (FragSize byte)]
-        // La callback gestirà l'allocazione effettiva del cPacket
         std::vector<uint8_t> packetToSend;
-        packetToSend.push_back(FRAGMENTATION_DATA_FRAGMENT_CMD); // Comando standard (0x08)
-        packetToSend.push_back((headerValue >> 8) & 0xFF);       // Byte più significativo dell'header
-        packetToSend.push_back(headerValue & 0xFF);             // Byte meno significativo dell'header
-        packetToSend.insert(packetToSend.end(), txFragmentBuffer.begin(), txFragmentBuffer.end());
+        packetToSend.push_back(FRAGMENTATION_DATA_FRAGMENT_CMD);
+        packetToSend.push_back((headerValue >> 8) & 0xFF);
+        packetToSend.push_back(headerValue & 0xFF);
+        packetToSend.insert(packetToSend.end(), currentFragment.begin(), currentFragment.end());
 
-        // Chiama la callback per inviare il pacchetto via LoRaWAN
-        // Usa la porta standard FRAGMENTATION_PORT (201)
         sendLoRaPacketCallback(packetToSend, FRAGMENTATION_PORT, 0);
         packetsSent++;
         EV << "Sent fragment " << i << " (Session Index: " << (int)sessionParams.fragIndex
            << ", Header Value: 0x" << std::hex << headerValue << std::dec << ")\n";
     }
-    txSessionStatus = FRAG_SESSION_FINISHED_OK; // La fase di trasmissione è completata
+    txSessionStatus = FRAG_SESSION_FINISHED_OK_APP;
 }
 
 void LoRaFragmentedApp::onLoRaPacketReceived(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t rssi, uint8_t snr)
@@ -231,31 +227,27 @@ void LoRaFragmentedApp::onLoRaPacketReceived(const std::vector<uint8_t>& packetD
         EV << "Received packet on wrong port: " << (int)port << ". Expected " << (int)FRAGMENTATION_PORT << ". Ignoring.\n";
         return;
     }
-    if (packetData.size() < 3) { // Minimo 1 byte comando + 2 byte header
+    if (packetData.size() < 3) {
         EV << "Received too small packet (" << packetData.size() << " bytes). Ignoring.\n";
         return;
     }
 
     uint8_t command = packetData[0];
     if (command != FRAGMENTATION_DATA_FRAGMENT_CMD) {
-        // Ignora pacchetti di controllo o altri comandi per ora
         EV << "Received control command (0x" << std::hex << (int)command << "). Ignoring for now.\n";
         return;
     }
 
-    // Estrai l'header a 2 byte
     uint16_t headerValue = (static_cast<uint16_t>(packetData[1]) << 8) | packetData[2];
-    uint8_t receivedFragIndex = (headerValue >> 14) & 0x03; // I 2 bit più significativi
-    uint16_t receivedFragCounter = headerValue & 0x3FFF;      // I 14 bit meno significativi
+    uint8_t receivedFragIndex = (headerValue >> 14) & 0x03;
+    uint16_t receivedFragCounter = headerValue & 0x3FFF;
 
-    // Verifica che l'indice di sessione sia corretto (utile se un giorno gestisci più sessioni)
     if (receivedFragIndex != sessionParams.fragIndex) {
         EV << "Received fragment for wrong session index (" << (int)receivedFragIndex << "). Expected " << (int)sessionParams.fragIndex << ". Ignoring.\n";
         return;
     }
 
-    // Copia il payload del frammento
-    size_t payloadSize = packetData.size() - 3; // Total size - 1 byte CMD - 2 bytes Header
+    size_t payloadSize = packetData.size() - 3;
     if (payloadSize != sessionParams.fragSize) {
         EV << "Received fragment with wrong payload size (" << payloadSize << " bytes). Expected " << (int)sessionParams.fragSize << ". Ignoring.\n";
         return;
@@ -266,41 +258,34 @@ void LoRaFragmentedApp::onLoRaPacketReceived(const std::vector<uint8_t>& packetD
     packetsPassedToDecoder++;
 
     if (rxSessionStatus == FRAG_SESSION_NOT_STARTED) {
-        // Inizializza lo stato di ricezione alla prima ricezione di un frammento valido
-        rxSessionStatus = FRAG_SESSION_ONGOING;
+        rxSessionStatus = FRAG_SESSION_ONGOING_APP;
     }
 
-    // Processa il frammento con il decoder
-    int32_t decodeStatus = decoder->FragDecoderProcess(receivedFragCounter, rxFragmentBuffer.data());
+    int32_t decodeStatus = fragmentedApp::FragDecoderProcess(receivedFragCounter, rxFragmentBuffer.data());
 
-    // Aggiorna lo stato della sessione di ricezione
     if (decodeStatus == FRAG_SESSION_FINISHED_OK) {
-        rxSessionStatus = FRAG_SESSION_FINISHED_OK;
+        rxSessionStatus = FRAG_SESSION_FINISHED_OK_APP;
         successfulDecodings++;
         EV << "Decoding successful! Original data reconstructed.\n";
-        // Qui potresti recuperare i dati decodificati se necessario
-        // uint8_t* decodedData = decoder->FragDecoderGetData();
-        // ...
     } else if (decodeStatus == FRAG_SESSION_FINISHED_ERROR) {
-        rxSessionStatus = FRAG_SESSION_FINISHED_ERROR;
+        rxSessionStatus = FRAG_SESSION_FINISHED_ERROR_APP;
         failedDecodings++;
         EV_ERROR << "Decoding failed! Matrix error or too many lost fragments.\n";
     }
-    // Se decodeStatus è FRAG_SESSION_ONGOING, non facciamo nulla qui, attendiamo altri frammenti.
 }
 
-FragDecoderStatus LoRaFragmentedApp::getDecoderStatus() const {
-    if (decoder) {
-        return decoder->FragDecoderGetStatus();
-    }
-    // Restituisce uno stato vuoto se il decoder non è inizializzato
-    return {0, 0, false};
+FragDecoderAppStatus LoRaFragmentedApp::getDecoderStatus() const {
+    fragmentedApp::FragDecoderStatus_t internalStatus = fragmentedApp::FragDecoderGetStatus();
+    FragDecoderAppStatus appStatus;
+    appStatus.FragNbRx = internalStatus.FragNbRx;
+    appStatus.FragNbLost = internalStatus.FragNbLost;
+    appStatus.MatrixError = (internalStatus.MatrixError == 1);
+    return appStatus;
 }
 
 void LoRaFragmentedApp::resetRxSession() {
     rxSessionStatus = FRAG_SESSION_NOT_STARTED;
-    packetsPassedToDecoder = 0; // Reset per la nuova sessione
-    // Dovresti anche chiamare decoder->FragDecoderErase() qui se vuoi resettare la memoria
+    packetsPassedToDecoder = 0;
 }
 
 
