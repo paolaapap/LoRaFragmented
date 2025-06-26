@@ -27,11 +27,13 @@ module LoRaNode
         LoRaNic: LoRaNic {
             @display("p=137,239");
         }
-        app: LoRaFragmentedApp { 
+        app[numApps]: <> like IApp { 
             parameters:
                 @display("p=375,76,row,150");
         }
     connections allowunconnected:
-        app.out --> LoRaNic.upperLayerIn; 
-        LoRaNic.upperLayerOut --> app.in; 
+        for i=0..numApps-1 {
+            app[i].socketOut --> LoRaNic.upperLayerIn;
+            LoRaNic.upperLayerOut --> app[i].socketIn;
+        }
 }
