@@ -49,7 +49,7 @@ module LoRaGW like INetworkNode
         bool hasUdp = default(firstAvailableOrEmpty("Udp") != "");
         string udpType = default(firstAvailableOrEmpty("UDP"));
 
-        LoRaGWNic.radio.antenna.mobilityModule = default("^.^.^.mobility");
+        //LoRaGWNic.radio.antenna.mobilityModule = default("^.^.^.mobility");
 
         *.mobilityModule = default(exists(mobility) ? absPath(".mobility") : "");
         

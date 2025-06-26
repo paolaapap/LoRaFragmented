@@ -2,7 +2,6 @@
 #include "FragEncoder.h"
 #include "FragDecoder.h"
 
-
 using namespace fragmentedApp;
 
 static std::vector<uint8_t>* globalDecoderMemoryBuffer = nullptr;
@@ -29,19 +28,18 @@ LoRaFragmentedApp::~LoRaFragmentedApp()
     globalDecoderMemorySize = 0;
 }
 
-void LoRaFragmentedApp::fragDecoderWrite(uint32_t addr, const void* buffer, uint32_t size) {
+
+void LoRaFragmentedApp::fragDecoderWrite(uint32_t addr, uint8_t* buffer, uint32_t size) {
     if (globalDecoderMemoryBuffer && addr + size <= globalDecoderMemorySize) {
-        std::copy(static_cast<const uint8_t*>(buffer),
-                  static_cast<const uint8_t*>(buffer) + size,
-                  globalDecoderMemoryBuffer->begin() + addr);
+        std::copy(buffer,buffer + size,globalDecoderMemoryBuffer->begin() + addr);
     }
 }
 
-void LoRaFragmentedApp::fragDecoderRead(uint32_t addr, void* buffer, uint32_t size) {
+void LoRaFragmentedApp::fragDecoderRead(uint32_t addr, uint8_t* buffer, uint32_t size) {
     if (globalDecoderMemoryBuffer && addr + size <= globalDecoderMemorySize) {
         std::copy(globalDecoderMemoryBuffer->begin() + addr,
                   globalDecoderMemoryBuffer->begin() + addr + size,
-                  static_cast<uint8_t*>(buffer));
+                  buffer);
     }
 }
 
@@ -99,7 +97,7 @@ void LoRaFragmentedApp::handleMessage(omnetpp::cMessage* msg)
     if (msg == startTxMsg) {
         std::vector<uint8_t> originalData(sessionParams.dataSize);
         for (uint32_t i = 0; i < sessionParams.dataSize; ++i) {
-            originalData[i] = (uint8_t)(i % 256); // Simple test data
+            originalData[i] = (uint8_t)(i % 256);
         }
         startTransmission(originalData);
         delete msg;
@@ -115,25 +113,23 @@ void LoRaFragmentedApp::handleMessage(omnetpp::cMessage* msg)
 }
 
 void LoRaFragmentedApp::finish() {
-    //recordScalar
+
     recordScalar("finalPacketsSent", (double)packetsSent);
-    emit(getAncestor()->registerSignal("finalSuccessfulDecodings"), (double)successfulDecodings);
-    emit(getAncestor()->registerSignal("finalFailedDecodings"), (double)failedDecodings);
+    recordScalar("finalSuccessfulDecodings", (double)successfulDecodings);
+    recordScalar("finalFailedDecodings", (double)failedDecodings);
 
     FragDecoderAppStatus finalStatus = getDecoderStatus();
-    emit(getAncestor()->registerSignal("finalFragNbRx"), (double)finalStatus.FragNbRx);
-    emit(getAncestor()->registerSignal("finalFragNbLost"), (double)finalStatus.FragNbLost);
-    emit(getAncestor()->registerSignal("finalMatrixError"), (double)finalStatus.MatrixError);
+    recordScalar("finalFragNbRx", (double)finalStatus.FragNbRx);
+    recordScalar("finalFragNbLost", (double)finalStatus.FragNbLost);
+    recordScalar("finalMatrixError", (double)finalStatus.MatrixError);
 
-    if (successfulDecodings > 0) {
-        if (rxSessionStatus == FRAG_SESSION_FINISHED_OK_APP) {
-             emit(overheadRatioSignal, (double)finalStatus.FragNbRx / sessionParams.m);
-        } else {
-             emit(overheadRatioSignal, 0.0);
-        }
-    } else {
-        emit(overheadRatioSignal, 0.0);
+    double overheadRatioValue = 0.0;
+
+    if (successfulDecodings > 0 && rxSessionStatus == FRAG_SESSION_FINISHED_OK_APP) {
+        overheadRatioValue = (double)finalStatus.FragNbRx / sessionParams.m;
     }
+
+    recordScalar("overheadRatio", overheadRatioValue);
 }
 
 void LoRaFragmentedApp::startTransmission(const std::vector<uint8_t>& originalData)
@@ -184,7 +180,11 @@ void LoRaFragmentedApp::startTransmission(const std::vector<uint8_t>& originalDa
         std::copy(currentFragment.begin(), currentFragment.end(), rawPayloadData.begin() + 3);
 
         packet->setByteLength(rawPayloadData.size());
-        packet->insert(new omnetpp::cBytes(rawPayloadData.data(), rawPayloadData.size()));
+        uint8_t* payloadCopy = new uint8_t[rawPayloadData.size()];
+        std::copy(rawPayloadData.begin(), rawPayloadData.end(), payloadCopy);
+        packet->setContextPointer(payloadCopy);
+        packet->setByteLength(rawPayloadData.size());
+
 
         send(packet, outGate);
         packetsSent++;
@@ -193,26 +193,22 @@ void LoRaFragmentedApp::startTransmission(const std::vector<uint8_t>& originalDa
     txSessionStatus = FRAG_SESSION_FINISHED_OK_APP;
 }
 
-void LoRaFragmentedApp::sendLoRaPacket(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t ackType) {
-    // This method is now effectively unused since startTransmission sends directly.
-    // Kept for backward compatibility if other parts of your code expect it.
-}
+
 
 void LoRaFragmentedApp::processLoRaPacket(omnetpp::cPacket* pkt)
 {
     packetsReceived++;
 
-    omnetpp::cBytes* bytesPayload = nullptr;
-    if (pkt->has<omnetpp::cBytes>()) {
-        bytesPayload = pkt->find<omnetpp::cBytes>();
-    }
+
+    uint8_t* bytesPayload = static_cast<uint8_t*>(pkt->getContextPointer());
 
     if (bytesPayload == nullptr) {
         EV_ERROR << "Received packet with no payload. Ignoring.\n";
         return;
     }
 
-    std::vector<uint8_t> packetData(bytesPayload->getData(), bytesPayload->getData() + bytesPayload->getDataLength());
+    std::vector<uint8_t> packetData(bytesPayload, bytesPayload + pkt->getByteLength());
+
 
     if (packetData.size() < 3) {
         EV << "Received too small packet. Ignoring.\n";
@@ -273,6 +269,9 @@ void LoRaFragmentedApp::processLoRaPacket(omnetpp::cPacket* pkt)
         FragDecoderCallbacks_t decoderCallbacks = {&LoRaFragmentedApp::fragDecoderWrite, &LoRaFragmentedApp::fragDecoderRead, &LoRaFragmentedApp::fragDecoderErase};
         fragmentedApp::FragDecoderInit(sessionParams.fragNb, sessionParams.fragSize, &decoderCallbacks);
     }
+
+    delete[] bytesPayload;
+
 }
 
 FragDecoderAppStatus LoRaFragmentedApp::getDecoderStatus() const {

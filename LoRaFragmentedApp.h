@@ -80,16 +80,15 @@ class LoRaFragmentedApp : public omnetpp::cSimpleModule
 
     omnetpp::cMessage* startTxMsg;
 
-    static void fragDecoderWrite(uint32_t addr, const void* buffer, uint32_t size);
-    static void fragDecoderRead(uint32_t addr, void* buffer, uint32_t size);
-    static void fragDecoderErase();
+    static void fragDecoderWrite(uint32_t addr, uint8_t *buffer, uint32_t size);
+        static void fragDecoderRead(uint32_t addr, uint8_t *buffer, uint32_t size);
+        static void fragDecoderErase();
 
     virtual void initialize() override;
     virtual void handleMessage(omnetpp::cMessage* msg) override;
     virtual void finish() override;
 
     void startTransmission(const std::vector<uint8_t>& originalData);
-    void sendLoRaPacket(const std::vector<uint8_t>& packetData, uint8_t port, uint8_t ackType); // Mantenuta per completezza, ma non usata
     void processLoRaPacket(omnetpp::cPacket* pkt);
     void resetRxSession();
 

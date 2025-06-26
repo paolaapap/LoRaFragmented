@@ -13,6 +13,7 @@ module LoRaNode
         double maxGatewayDistance = default(320.0);
         double gatewayX = default(320.0);
         double gatewayY = default(320.0);
+        string appTypes;
 
         @networkNode();
         *.interfaceTableModule = default(absPath(".interfaceTable"));
