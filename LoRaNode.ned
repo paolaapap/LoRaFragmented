@@ -3,7 +3,7 @@ package flora.LoraNode;
 import inet.mobility.static.StationaryMobility;
 import inet.networklayer.common.InterfaceTable;
 import flora.LoRa.LoRaNic;
-import LoRaFragmentedApp; 
+import inet.applications.contract.IApp;
 
 module LoRaNode
 {
