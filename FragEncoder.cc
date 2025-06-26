@@ -15,14 +15,14 @@ std::vector<std::vector<uint8_t>> generateCodedFragments(
     uint8_t currentFragmentSize = fragmentSize;
 
     if(originalFileBuffer.size() != (size_t)w * currentFragmentSize){
-        EV_ERROR <<"Original file buffer size mismatch!">;
+        //EV_ERROR <<"Original file buffer size mismatch!";
         return {}; //ritorna un vett vuoto
     }
 
     std::vector<std::vector<uint8_t>> UNCODED_F(w, std::vector<uint8_t>(currentFragmentSize, 0));
 
     for(uint16_t k=0; k<w; k++){
-        std::cpy(originalFileBuffer.begin() + k*currentFragmentSize,
+        std::copy(originalFileBuffer.begin() + k*currentFragmentSize,
                  originalFileBuffer.begin() + (k+1) * currentFragmentSize,
                  UNCODED_F[k].begin());
 

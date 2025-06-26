@@ -2,6 +2,7 @@
 #include "FragEncoder.h"
 #include "FragDecoder.h"
 
+
 using namespace fragmentedApp;
 
 static std::vector<uint8_t>* globalDecoderMemoryBuffer = nullptr;
@@ -33,8 +34,6 @@ void LoRaFragmentedApp::fragDecoderWrite(uint32_t addr, const void* buffer, uint
         std::copy(static_cast<const uint8_t*>(buffer),
                   static_cast<const uint8_t*>(buffer) + size,
                   globalDecoderMemoryBuffer->begin() + addr);
-    } else {
-        EV_ERROR << "Decoder write error: out of bounds or buffer not set.\n";
     }
 }
 
@@ -43,16 +42,12 @@ void LoRaFragmentedApp::fragDecoderRead(uint32_t addr, void* buffer, uint32_t si
         std::copy(globalDecoderMemoryBuffer->begin() + addr,
                   globalDecoderMemoryBuffer->begin() + addr + size,
                   static_cast<uint8_t*>(buffer));
-    } else {
-        EV_ERROR << "Decoder read error: out of bounds or buffer not set.\n";
     }
 }
 
 void LoRaFragmentedApp::fragDecoderErase() {
     if (globalDecoderMemoryBuffer) {
         std::fill(globalDecoderMemoryBuffer->begin(), globalDecoderMemoryBuffer->end(), 0);
-    } else {
-        EV_ERROR << "Decoder erase error: Buffer not set.\n";
     }
 }
 
@@ -120,7 +115,8 @@ void LoRaFragmentedApp::handleMessage(omnetpp::cMessage* msg)
 }
 
 void LoRaFragmentedApp::finish() {
-    emit(getAncestor()->registerSignal("finalPacketsSent"), (double)packetsSent);
+    //recordScalar
+    recordScalar("finalPacketsSent", (double)packetsSent);
     emit(getAncestor()->registerSignal("finalSuccessfulDecodings"), (double)successfulDecodings);
     emit(getAncestor()->registerSignal("finalFailedDecodings"), (double)failedDecodings);
 

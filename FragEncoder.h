@@ -1,3 +1,4 @@
+#ifndef FRAG_CODEC_UTILS_H
 #define FRAG_CODEC_UTILS_H
 
 #include <stdint.h>
@@ -11,3 +12,4 @@ namespace fragmentedApp{
             uint16_t numCodedFragmentsToGenerate
     );
 }
+#endif

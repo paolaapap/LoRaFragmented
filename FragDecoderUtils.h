@@ -1,3 +1,4 @@
+#ifndef FRAG_DECODER_UTILS_H
 #define FRAG_DECODER_UTILS_H
 #include <stdint.h>
 #include<stdbool.h>
@@ -12,3 +13,4 @@ void FragGetParityMatrixRow(int32_t n, int32_t m, uint8_t *matrixRow);
 uint16_t BitArrayFindFirstOne(uint8_t *birArray, uint16_t size);
 uint8_t BitArrayIsAllZeros(uint8_t *bitArray, uint16_t size);
 }
+#endif

@@ -1,3 +1,4 @@
+#ifndef FRAG_DECODER_H
 #define FRAG_DECODER_H
 #include <stdint.h>
 #include <stdbool.h>
@@ -40,4 +41,4 @@ int32_t FragDecoderProcess( uint16_t fragCounter, uint8_t *rawData );
 FragDecoderStatus_t FragDecoderGetStatus( void );
 
 }
-
+#endif

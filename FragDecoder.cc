@@ -3,7 +3,7 @@
 #include <string.h>
 #include <algorithm>
 
-#define memset1 std::memset
+#define memset1 memset
 
 namespace fragmentedApp {
 

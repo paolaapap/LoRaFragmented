@@ -1,7 +1,9 @@
+#ifndef LORAFRAGMENTEDAPP_H
 #define LORAFRAGMENTEDAPP_H
 
 #include "FragEncoder.h"
 #include "FragDecoder.h"
+#include <omnetpp.h>
 
 #define FRAGMENTATION_DATA_FRAGMENT_CMD 0x08
 #define FRAGMENTATION_PORT 201
@@ -104,3 +106,4 @@ class LoRaFragmentedApp : public omnetpp::cSimpleModule
     uint32_t getSuccessfulDecodings() const { return successfulDecodings; }
     uint32_t getFailedDecodings() const { return failedDecodings; }
 };
+#endif

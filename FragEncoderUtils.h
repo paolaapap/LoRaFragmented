@@ -1,3 +1,4 @@
+#ifndef FRAG_ENCODER_UTILS_H
 #define FRAG_ENCODER_UTILS_H
 
 #include <stdint.h>
@@ -9,7 +10,7 @@ namespace fragmentedApp {
     // M: numero totale di frammenti non codificati
     std::vector<uint8_t> matrix_line(int32_t N, int32_t M);
 }
-
+#endif
 
 
 
