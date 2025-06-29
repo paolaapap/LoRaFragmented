@@ -32,7 +32,7 @@ typedef struct{
 } FragDecoderStatus_t;
 
 //inizializza il decoder di frammentazione
-void FragDecoderInit( uint16_t fragNb, uint8_t fragSize, FragDecoderCallbacks_t *callbacks, uint8_t fragPVer );
+void FragDecoderInit( uint16_t fragNb, uint8_t fragSize, FragDecoderCallbacks_t *callbacks);
 
 //elabora un frammento ricevuto
 int32_t FragDecoderProcess( uint16_t fragCounter, uint8_t *rawData );

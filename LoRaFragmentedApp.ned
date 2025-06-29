@@ -15,4 +15,6 @@ simple LoRaFragmentedApp like IApp
     gates:
         input in;
         output out;
+        input socketIn;
+        output socketOut;
 }

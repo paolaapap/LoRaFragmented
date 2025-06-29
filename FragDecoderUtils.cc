@@ -17,8 +17,8 @@ void SetParity(uint16_t index, uint8_t *matrixRow, uint8_t parity) {
     matrixRow[index >> 3] = (matrixRow[index >> 3] & mask) + parity;
 }
 
-void XorDataLine(uint8_t *line1, uint8_t *line2, int32_t size) {
-    for (int32_t i = 0; i < size; i++) {
+void XorDataLine(uint8_t *line1, uint8_t *line2, uint32_t size) {
+    for (uint32_t i = 0; i < size; i++) {
         line1[i] = line1[i] ^ line2[i];
     }
 }
