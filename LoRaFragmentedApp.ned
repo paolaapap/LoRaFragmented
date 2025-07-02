@@ -1,3 +1,4 @@
+
 package flora.LoraNode;
 
 import inet.applications.contract.IApp;
@@ -10,7 +11,7 @@ simple LoRaFragmentedApp like IApp
         int fragmentSize;
         int dataSize;
         int sessionIndex;
-        @display("i=block/app"); 
+        @display("i=block/app");
 
     gates:
         input in;

@@ -2,10 +2,14 @@
 #include "FragEncoder.h"
 #include "FragDecoder.h"
 
+namespace flora {
+
 using namespace fragmentedApp;
 
 static std::vector<uint8_t>* globalDecoderMemoryBuffer = nullptr;
 static uint32_t globalDecoderMemorySize = 0;
+
+Define_Module(LoRaFragmentedApp);
 
 LoRaFragmentedApp::LoRaFragmentedApp() :
     txSessionStatus(FRAG_SESSION_NOT_STARTED),
@@ -154,9 +158,9 @@ void LoRaFragmentedApp::startTransmission(const std::vector<uint8_t>& originalDa
 
     std::vector<std::vector<uint8_t>> allCodedFragments =
         fragmentedApp::generateCodedFragments(paddedOriginalData,
-                                               sessionParams.m,
-                                               sessionParams.fragSize,
-                                               sessionParams.fragNb);
+                                             sessionParams.m,
+                                             sessionParams.fragSize,
+                                             sessionParams.fragNb);
 
     if (allCodedFragments.empty() || allCodedFragments.size() != sessionParams.fragNb) {
         EV_ERROR << "Failed to generate coded fragments.\n";
@@ -211,13 +215,13 @@ void LoRaFragmentedApp::processLoRaPacket(omnetpp::cPacket* pkt)
 
 
     if (packetData.size() < 3) {
-        EV << "Received too small packet. Ignoring.\n";
+        EV_WARN << "Received too small packet. Ignoring.\n";
         return;
     }
 
     uint8_t command = packetData[0];
     if (command != FRAGMENTATION_DATA_FRAGMENT_CMD) {
-        EV << "Received control command. Ignoring for now.\n";
+        EV_WARN << "Received control command. Ignoring for now.\n";
         return;
     }
 
@@ -226,13 +230,13 @@ void LoRaFragmentedApp::processLoRaPacket(omnetpp::cPacket* pkt)
     uint16_t receivedFragCounter = headerValue & 0x3FFF;
 
     if (receivedFragIndex != sessionParams.fragIndex) {
-        EV << "Fragment for wrong session index. Ignoring.\n";
+        EV_WARN << "Fragment for wrong session index. Ignoring.\n";
         return;
     }
 
     size_t payloadSize = packetData.size() - 3;
     if (payloadSize != sessionParams.fragSize) {
-        EV << "Received fragment with wrong payload size. Ignoring.\n";
+        EV_WARN << "Received fragment with wrong payload size. Ignoring.\n";
         return;
     }
     std::copy(packetData.begin() + 3, packetData.end(), rxFragmentBuffer.begin());
@@ -288,4 +292,4 @@ void LoRaFragmentedApp::resetRxSession() {
     packetsPassedToDecoder = 0;
 }
 
-Define_Module(LoRaFragmentedApp);
+} //namespace

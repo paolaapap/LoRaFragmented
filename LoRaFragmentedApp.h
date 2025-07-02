@@ -1,31 +1,31 @@
-#ifndef LORAFRAGMENTEDAPP_H
-#define LORAFRAGMENTEDAPP_H
 
+#ifndef __FLORA_LORAFRAGMENTEDAPP_H_
+#define __FLORA_LORAFRAGMENTEDAPP_H_
+
+#include <omnetpp.h>
 #include "FragEncoder.h"
 #include "FragDecoder.h"
-#include <omnetpp.h>
+#include <vector>
+#include <cstdint>
 
 #define FRAGMENTATION_DATA_FRAGMENT_CMD 0x08
 #define FRAGMENTATION_PORT 201
 
 #define START_TRANSMISSION_MSG_KIND 100
 
-namespace fragmentedApp {
-    std::vector<std::vector<uint8_t>> generateCodedFragments(
-                const std::vector<uint8_t>& originalFileBuffer,
-                uint16_t numFragments,
-                uint8_t fragmentSize,
-                uint16_t numCodedFragmentsToGenerate
-            );
+namespace flora {
 
-    void FragDecoderInit( uint16_t fragNb, uint8_t fragSize, FragDecoderCallbacks_t *callbacks );
-    int32_t FragDecoderProcess( uint16_t fragCounter, uint8_t *rawData );
-    FragDecoderStatus_t FragDecoderGetStatus( void );
+std::vector<std::vector<uint8_t>> generateCodedFragments(
+    const std::vector<uint8_t>& originalFileBuffer,
+    uint16_t numFragments,
+    uint8_t fragmentSize,
+    uint16_t numCodedFragmentsToGenerate
+);
 
-    #define FRAG_SESSION_ONGOING            -1
-    #define FRAG_SESSION_FINISHED_OK         0
-    #define FRAG_SESSION_FINISHED_ERROR      1
-}
+
+#define FRAG_SESSION_ONGOING            -1
+#define FRAG_SESSION_FINISHED_OK         0
+#define FRAG_SESSION_FINISHED_ERROR      1
 
 enum FragSessionStatus {
     FRAG_SESSION_NOT_STARTED = -2,
@@ -81,8 +81,8 @@ class LoRaFragmentedApp : public omnetpp::cSimpleModule
     omnetpp::cMessage* startTxMsg;
 
     static void fragDecoderWrite(uint32_t addr, uint8_t *buffer, uint32_t size);
-        static void fragDecoderRead(uint32_t addr, uint8_t *buffer, uint32_t size);
-        static void fragDecoderErase();
+    static void fragDecoderRead(uint32_t addr, uint8_t *buffer, uint32_t size);
+    static void fragDecoderErase();
 
     virtual void initialize() override;
     virtual void handleMessage(omnetpp::cMessage* msg) override;
@@ -105,4 +105,7 @@ class LoRaFragmentedApp : public omnetpp::cSimpleModule
     uint32_t getSuccessfulDecodings() const { return successfulDecodings; }
     uint32_t getFailedDecodings() const { return failedDecodings; }
 };
+
+}
+
 #endif
