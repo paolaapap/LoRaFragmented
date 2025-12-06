@@ -21,6 +21,8 @@ LoRaFragmentedApp::LoRaFragmentedApp() :
     failedDecodings(0),
     outGate(nullptr),
     startTxMsg(nullptr),
+    nextFragTimer(nullptr), 
+    currentFragToSend(0),   
     decoderMemorySize(0)
 {
 }
@@ -28,6 +30,7 @@ LoRaFragmentedApp::LoRaFragmentedApp() :
 LoRaFragmentedApp::~LoRaFragmentedApp()
 {
     cancelAndDelete(startTxMsg);
+    cancelAndDelete(nextFragTimer); 
     globalDecoderMemoryBuffer = nullptr;
     globalDecoderMemorySize = 0;
 }
@@ -72,7 +75,7 @@ void LoRaFragmentedApp::initialize()
 
     uint32_t originalDataBytesForEncoding = sessionParams.m * sessionParams.fragSize;
     if (sessionParams.dataSize > originalDataBytesForEncoding) {
-        sessionParams.padding = 0; // Data will be truncated
+        sessionParams.padding = 0; 
     } else {
         sessionParams.padding = originalDataBytesForEncoding - sessionParams.dataSize;
     }
@@ -92,6 +95,9 @@ void LoRaFragmentedApp::initialize()
 
     outGate = gate("out");
 
+    nextFragTimer = new omnetpp::cMessage("nextFragTimer");
+    currentFragToSend = 0;
+
     startTxMsg = new omnetpp::cMessage("startTxMsg", START_TRANSMISSION_MSG_KIND);
     scheduleAt(0.0, startTxMsg);
 }
@@ -106,7 +112,51 @@ void LoRaFragmentedApp::handleMessage(omnetpp::cMessage* msg)
         startTransmission(originalData);
         delete msg;
         startTxMsg = nullptr;
-    } else if (msg->isPacket()) {
+
+    } 
+    else if (msg == nextFragTimer) {
+        if (currentFragToSend < sessionParams.fragNb && currentFragToSend < fragmentsToSend.size()) {
+            
+            // 1. Recupera il frammento
+            const std::vector<uint8_t>& currentFragment = fragmentsToSend[currentFragToSend];
+
+            // 2. Crea Header
+            uint16_t headerValue = (static_cast<uint16_t>(sessionParams.fragIndex & 0x03) << 14) | (currentFragToSend & 0x3FFF);
+
+            // 3. Crea Packet OMNeT
+            omnetpp::cPacket* packet = new omnetpp::cPacket("fragPacket");
+            
+            // 4. Prepara Payload
+            std::vector<uint8_t> rawPayloadData(currentFragment.size() + 3);
+            rawPayloadData[0] = FRAGMENTATION_DATA_FRAGMENT_CMD;
+            rawPayloadData[1] = (headerValue >> 8) & 0xFF;
+            rawPayloadData[2] = headerValue & 0xFF;
+            std::copy(currentFragment.begin(), currentFragment.end(), rawPayloadData.begin() + 3);
+
+            packet->setByteLength(rawPayloadData.size());
+            uint8_t* payloadCopy = new uint8_t[rawPayloadData.size()];
+            std::copy(rawPayloadData.begin(), rawPayloadData.end(), payloadCopy);
+            packet->setContextPointer(payloadCopy);
+            packet->setByteLength(rawPayloadData.size());
+
+            // 5. Invia
+            send(packet, outGate);
+            packetsSent++;
+            emit(packetsSentSignal, (double)packetsSent);
+
+            EV << "Sent fragment index: " << currentFragToSend << endl;
+
+            currentFragToSend++;
+
+            // 6. Pianifica il prossimo invio
+            scheduleAt(simTime() + 5.0, nextFragTimer);
+
+        } else {
+            EV << "Transmission session finished." << endl;
+            txSessionStatus = FRAG_SESSION_FINISHED_OK_APP;
+        }
+    } 
+    else if (msg->isPacket()) {
         omnetpp::cPacket* pkt = omnetpp::check_and_cast<omnetpp::cPacket*>(msg);
         processLoRaPacket(pkt);
         delete pkt;
@@ -156,53 +206,24 @@ void LoRaFragmentedApp::startTransmission(const std::vector<uint8_t>& originalDa
         paddedOriginalData.resize(expectedEncoderInputSize);
     }
 
-    std::vector<std::vector<uint8_t>> allCodedFragments =
-        fragmentedApp::generateCodedFragments(paddedOriginalData,
-                                             sessionParams.m,
-                                             sessionParams.fragSize,
-                                             sessionParams.fragNb);
+    fragmentsToSend = fragmentedApp::generateCodedFragments(paddedOriginalData,
+                                                            sessionParams.m,
+                                                            sessionParams.fragSize,
+                                                            sessionParams.fragNb);
 
-    if (allCodedFragments.empty() || allCodedFragments.size() != sessionParams.fragNb) {
+    if (fragmentsToSend.empty() || fragmentsToSend.size() != sessionParams.fragNb) {
         EV_ERROR << "Failed to generate coded fragments.\n";
         txSessionStatus = FRAG_SESSION_FINISHED_ERROR_APP;
         return;
     }
 
-    for (uint16_t i = 0; i < sessionParams.fragNb; ++i) {
-        uint16_t fragCounter = i;
-
-        uint16_t headerValue = (static_cast<uint16_t>(sessionParams.fragIndex & 0x03) << 14) | (fragCounter & 0x3FFF);
-
-        const std::vector<uint8_t>& currentFragment = allCodedFragments[i];
-
-        omnetpp::cPacket* packet = new omnetpp::cPacket("fragPacket");
-
-        std::vector<uint8_t> rawPayloadData(currentFragment.size() + 3);
-        rawPayloadData[0] = FRAGMENTATION_DATA_FRAGMENT_CMD;
-        rawPayloadData[1] = (headerValue >> 8) & 0xFF;
-        rawPayloadData[2] = headerValue & 0xFF;
-        std::copy(currentFragment.begin(), currentFragment.end(), rawPayloadData.begin() + 3);
-
-        packet->setByteLength(rawPayloadData.size());
-        uint8_t* payloadCopy = new uint8_t[rawPayloadData.size()];
-        std::copy(rawPayloadData.begin(), rawPayloadData.end(), payloadCopy);
-        packet->setContextPointer(payloadCopy);
-        packet->setByteLength(rawPayloadData.size());
-
-
-        send(packet, outGate);
-        packetsSent++;
-        emit(packetsSentSignal, (double)packetsSent);
-    }
-    txSessionStatus = FRAG_SESSION_FINISHED_OK_APP;
+    currentFragToSend = 0;
+    scheduleAt(simTime(), nextFragTimer);
 }
-
-
 
 void LoRaFragmentedApp::processLoRaPacket(omnetpp::cPacket* pkt)
 {
     packetsReceived++;
-
 
     uint8_t* bytesPayload = static_cast<uint8_t*>(pkt->getContextPointer());
 
@@ -212,7 +233,6 @@ void LoRaFragmentedApp::processLoRaPacket(omnetpp::cPacket* pkt)
     }
 
     std::vector<uint8_t> packetData(bytesPayload, bytesPayload + pkt->getByteLength());
-
 
     if (packetData.size() < 3) {
         EV_WARN << "Received too small packet. Ignoring.\n";
@@ -275,7 +295,6 @@ void LoRaFragmentedApp::processLoRaPacket(omnetpp::cPacket* pkt)
     }
 
     delete[] bytesPayload;
-
 }
 
 FragDecoderAppStatus LoRaFragmentedApp::getDecoderStatus() const {
