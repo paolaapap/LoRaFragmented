@@ -1,4 +1,3 @@
-
 #ifndef __FLORA_LORAFRAGMENTEDAPP_H_
 #define __FLORA_LORAFRAGMENTEDAPP_H_
 
@@ -15,17 +14,9 @@
 
 namespace flora {
 
-std::vector<std::vector<uint8_t>> generateCodedFragments(
-    const std::vector<uint8_t>& originalFileBuffer,
-    uint16_t numFragments,
-    uint8_t fragmentSize,
-    uint16_t numCodedFragmentsToGenerate
-);
-
-
-#define FRAG_SESSION_ONGOING            -1
-#define FRAG_SESSION_FINISHED_OK         0
-#define FRAG_SESSION_FINISHED_ERROR      1
+#define FRAG_SESSION_ONGOING             -1
+#define FRAG_SESSION_FINISHED_OK          0
+#define FRAG_SESSION_FINISHED_ERROR       1
 
 enum FragSessionStatus {
     FRAG_SESSION_NOT_STARTED = -2,
@@ -77,8 +68,11 @@ class LoRaFragmentedApp : public omnetpp::cSimpleModule
     omnetpp::simsignal_t overheadRatioSignal;
 
     omnetpp::cGate* outGate;
-
     omnetpp::cMessage* startTxMsg;
+
+    omnetpp::cMessage* nextFragTimer;                
+    uint16_t currentFragToSend;                         
+    std::vector<std::vector<uint8_t>> fragmentsToSend;  
 
     static void fragDecoderWrite(uint32_t addr, uint8_t *buffer, uint32_t size);
     static void fragDecoderRead(uint32_t addr, uint8_t *buffer, uint32_t size);
